@@ -20770,15 +20770,6 @@ function dh(t, ...e) {
     }, e), s._setSettings(e), s;
 }), "PUBLIC" /* PUBLIC */)), registerVersion("@firebase/firestore", "0.0.900-exp.6ef484a04", Ph);
 
-var firebaseConfig = {
-  apiKey: "AIzaSyAJv0aTJMCbG_e6FJZzc6hSzri9qDCmvoo",
-  authDomain: "rally-web-spike.firebaseapp.com",
-  projectId: "rally-web-spike",
-  storageBucket: "rally-web-spike.appspot.com",
-  messagingSenderId: "85993993890",
-  appId: "1:85993993890:web:b975ff99733d2d8b50c9fb"
-};
-
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20795,16 +20786,11 @@ var authProviders;
 })(authProviders || (authProviders = {}));
 var webMessages;
 (function (webMessages) {
-    webMessages["WEB_CHECK"] = "web-check";
-    webMessages["COMPLETE_SIGNUP"] = "complete-signup";
-    webMessages["WEB_CHECK_RESPONSE"] = "web-check-response";
-    webMessages["COMPLETE_SIGNUP_RESPONSE"] = "complete-signup-response";
+    webMessages["WEB_CHECK"] = "rally-sdk.web-check";
+    webMessages["COMPLETE_SIGNUP"] = "rally-sdk.complete-signup";
+    webMessages["WEB_CHECK_RESPONSE"] = "rally-sdk.web-check-response";
+    webMessages["COMPLETE_SIGNUP_RESPONSE"] = "rally-sdk.complete-signup-response";
 })(webMessages || (webMessages = {}));
-var routes;
-(function (routes) {
-    routes["ONBOARD"] = "onboard";
-    routes["SIGNUP"] = "signup";
-})(routes || (routes = {}));
 class Rally {
     /**
      * Initialize the Rally library.
@@ -20824,8 +20810,11 @@ class Rally {
      *
      * @param {String} studyId
      *        A string containing the unique name of the study, separate from the Firefox add-on ID and Chrome extension ID.
+     *
+     * @param {object} firebaseConfig
+     *        An object containing the Firebase backend configuration.
      */
-    constructor(enableDevMode, stateChangeCallback, rallySite, studyId) {
+    constructor(enableDevMode, stateChangeCallback, rallySite, studyId, firebaseConfig) {
         if (!stateChangeCallback) {
             throw new Error("Rally.initialize - Initialization failed, stateChangeCallback is required.");
         }
@@ -20835,9 +20824,11 @@ class Rally {
         this._enableDevMode = Boolean(enableDevMode);
         this._rallySite = rallySite;
         this._studyId = studyId;
+        this._signedIn = false;
         // Set the initial state to paused, and register callback for future changes.
         this._state = runStates.PAUSED;
         this._stateChangeCallback = stateChangeCallback;
+        console.debug("Rally - firebase config:", firebaseConfig);
         const firebaseApp = initializeApp(firebaseConfig);
         this._auth = getAuth(firebaseApp);
         this._db = Cu(firebaseApp);
@@ -20847,35 +20838,35 @@ class Rally {
         }
         this._authStateChangedCallback = (user) => __awaiter(this, void 0, void 0, function* () {
             if (user) {
+                // Record that we have signed in, so we don't keep trying to onboard.
+                this._signedIn = true;
                 // This is a restricted user, which can see a minimal part of the users data.
                 // The users Firebase UID is needed for this, and it is available in a custom claim on the JWT.
                 const idTokenResult = yield this._auth.currentUser.getIdTokenResult();
                 const uid = idTokenResult.claims.firebaseUid;
                 // This contains the Rally ID, need to call the Rally state change callback with it.
-                dh(Iu(this._db, "extensionUsers", uid), (extensionUserDoc) => __awaiter(this, void 0, void 0, function* () {
-                    if (!extensionUserDoc || !extensionUserDoc.data) {
-                        throw new Error("Rally onSnapshot - invalid extension users document");
+                dh(Iu(this._db, "extensionUsers", uid), extensionUserDoc => {
+                    if (!extensionUserDoc.exists()) {
+                        throw new Error("Rally onSnapshot - extensionUser document does not exist");
                     }
                     // https://datatracker.ietf.org/doc/html/rfc4122#section-4.1.7
                     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-                    if (extensionUserDoc && extensionUserDoc.data) {
-                        const data = extensionUserDoc.data();
-                        if (data && data.rallyId) {
-                            if (data.rallyId.match(uuidRegex)) {
-                                // Stored Rally ID looks fine, cache it and call the Rally state change callback with it.
-                                this._rallyId = data.rallyId;
-                            }
-                            else {
-                                // Do not loop or destroy data if the stored Rally ID is invalid, bail out instead.
-                                throw new Error(`Stored Rally ID is not a valid UUID: ${data.rallyId}`);
-                            }
+                    const data = extensionUserDoc.data();
+                    if (data && data.rallyId) {
+                        if (data.rallyId.match(uuidRegex)) {
+                            // Stored Rally ID looks fine, cache it and call the Rally state change callback with it.
+                            this._rallyId = data.rallyId;
+                        }
+                        else {
+                            // Do not loop or destroy data if the stored Rally ID is invalid, bail out instead.
+                            throw new Error(`Stored Rally ID is not a valid UUID: ${data.rallyId}`);
                         }
                     }
-                }));
+                });
                 dh(Iu(this._db, "studies", this._studyId), (studiesDoc) => __awaiter(this, void 0, void 0, function* () {
                     // TODO do runtime validation of this document
-                    if (!studiesDoc || !studiesDoc.data) {
-                        throw new Error("Rally onSnapshot - invalid studies document");
+                    if (!studiesDoc.exists()) {
+                        throw new Error("Rally onSnapshot - studies document does not exist");
                     }
                     const data = studiesDoc.data();
                     if (data.studyPaused && data.studyPaused === true) {
@@ -20885,8 +20876,10 @@ class Rally {
                     }
                     else {
                         const userStudiesDoc = yield nh(Iu(this._db, "users", uid, "studies", this._studyId));
-                        if (!userStudiesDoc || !userStudiesDoc.data) {
+                        // TODO do runtime validation of this document
+                        if (userStudiesDoc && !userStudiesDoc.exists()) {
                             // This document is created by the site and may not exist yet.
+                            console.warn("Rally.onSnapshot - userStudies document does not exist yet");
                             return;
                         }
                         const data = userStudiesDoc.data();
@@ -20901,8 +20894,9 @@ class Rally {
                     }
                 }));
                 dh(Iu(this._db, "users", uid, "studies", this._studyId), (userStudiesDoc) => __awaiter(this, void 0, void 0, function* () {
-                    if (!userStudiesDoc || !userStudiesDoc.data) {
+                    if (!userStudiesDoc.exists()) {
                         // This document is created by the site and may not exist yet.
+                        console.warn("Rally.onSnapshot - userStudies document does not exist");
                         return;
                     }
                     const data = userStudiesDoc.data();
@@ -20915,41 +20909,26 @@ class Rally {
                 }));
             }
             else {
-                this._promptSignUp(routes.SIGNUP).catch(err => console.error(`Rally._authStateChangedCallbacke: ${err.message}`));
+                yield this._promptSignUp();
             }
+            browser$1.runtime.onMessage.addListener((m, s) => this._handleWebMessage(m, s));
         });
         onAuthStateChanged(this._auth, this._authStateChangedCallback);
-        browser$1.runtime.onConnect.addListener((port) => {
-            port.onMessage.addListener((m, s) => this._handleWebMessage(m, s));
-        });
     }
-    _promptSignUp(reason, study) {
+    _promptSignUp() {
         return __awaiter(this, void 0, void 0, function* () {
-            let route = "";
-            switch (reason) {
-                case routes.ONBOARD:
-                    if (study) {
-                        // FIXME we should trigger the individual study route = `studies/${study}`;
-                        route = `studies`;
-                    }
-                    break;
-                case routes.SIGNUP:
-                    route = "signup";
-                    break;
-                default:
-                    throw new Error(`_promptSignUp: unknown sign-up reason ${reason} for study ${study}`);
-            }
-            const tabs = yield browser$1.tabs.query({ url: `${this._rallySite}/${route}` });
+            let loadedTab;
+            const tabs = yield browser$1.tabs.query({ url: `${this._rallySite}/*` });
             // If there are any tabs with the Rally site loaded, focus the latest one.
             if (tabs && tabs.length > 0) {
-                const tab = tabs.pop();
-                browser$1.windows.update(tab.windowId, { focused: true });
-                browser$1.tabs.update(tab.id, { highlighted: true, active: true });
+                loadedTab = tabs.pop();
+                yield browser$1.windows.update(loadedTab.windowId, { focused: true });
+                yield browser$1.tabs.update(loadedTab.id, { highlighted: true, active: true });
             }
             else {
                 // Otherwise, open the website.
-                chrome.tabs.create({
-                    url: `${this._rallySite}/${route}`
+                loadedTab = yield browser$1.tabs.create({
+                    url: this._rallySite
                 });
             }
         });
@@ -21004,7 +20983,10 @@ class Rally {
     */
     _handleWebMessage(message, sender) {
         return __awaiter(this, void 0, void 0, function* () {
-            console.log("Rally_handleWebMessage - received web message", message, "from", sender);
+            if (sender.id !== browser$1.runtime.id) {
+                throw new Error(`Rally._handleWebMessage - unknown sender ${sender.id}, expected ${browser$1.runtime.id}`);
+            }
+            console.log("Rally._handleWebMessage - received web message", message, "from", sender);
             // ** IMPORTANT **
             //
             // The website should *NOT EVER* be trusted. Other addons could be
@@ -21021,31 +21003,40 @@ class Rally {
                     // Rally SDK and expose that to the web. By exposing this ourselves
                     // through content scripts enabled on our domain, we don't make things
                     // worse.
-                    return {
-                        type: webMessages.WEB_CHECK_RESPONSE,
-                        data: {}
-                    };
-                case webMessages.COMPLETE_SIGNUP:
-                    // The `complete-signup` message should be safe: It's a one-direction
-                    // communication from the page, containing the credentials from the currently-authenticated user.
+                    // FIXME check internally to see if we need this yet or not.
+                    // Now that the site is open, send a message asking for a JWT.
+                    if (!this._signedIn) {
+                        console.debug("not signed in, sending complete_signup request");
+                        yield browser$1.tabs.sendMessage(sender.tab.id, { type: webMessages.COMPLETE_SIGNUP, data: { studyId: this._studyId } });
+                    }
+                    else {
+                        console.debug("already signed in, not sending complete_signup request");
+                    }
+                    console.debug("sending web-check-response to sender:", sender, " done");
+                    yield browser$1.tabs.sendMessage(sender.tab.id, { type: webMessages.WEB_CHECK_RESPONSE, data: {} });
+                    break;
+                case webMessages.COMPLETE_SIGNUP_RESPONSE:
+                    // The `complete-signup-response` message should be safe: It's a response
+                    // from the page, containing the credentials from the currently-authenticated user.
                     //
                     // Note that credentials should *NEVER* be passed to web content, but accepting them from web content
                     // should be relatively safe. An attacker-controlled site (whether through MITM, rogue extension, XSS, etc.)
                     // could potentially pass us a working credential that is attacker-controlled, but this should not cause the
                     // extension to send data anywhere attacker-controlled, since the data collection endpoint is hardcoded and signed
                     // along with the extension.
-                    const signedUp = yield this._completeSignUp(message.data);
-                    return { type: webMessages.COMPLETE_SIGNUP_RESPONSE, data: { signedUp } };
+                    yield this._completeSignUp(message.data);
+                    break;
                 default:
-                    throw new Error(`Rally._handleWebMessage - unexpected message type "${message.type}"`);
+                    console.warn(`Rally._handleWebMessage - unexpected message type "${message.type}"`);
             }
         });
     }
     _completeSignUp(data) {
         return __awaiter(this, void 0, void 0, function* () {
+            console.debug("Rally._completeSignUp called:", data);
             try {
                 if (!data || !data.rallyToken) {
-                    throw new Error("Rally._completeSignUp - rally token not well-formed");
+                    throw new Error(`Rally._completeSignUp - rally token not well-formed: ${data.rallyToken}`);
                 }
                 console.debug("Rally._completeSignUp - ", data);
                 // Pause study when new credentials are passed.
