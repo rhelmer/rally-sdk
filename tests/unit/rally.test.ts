@@ -119,6 +119,8 @@ describe('Rally SDK', function () {
     let resumeCallbackCalled = false;
 
     const rally = new Rally({
+      schemaNamespace: "",
+      key: {},
       enableDevMode: false,
       stateChangeCallback: (message) => {
         if (message === runStates.PAUSED) {
@@ -127,6 +129,7 @@ describe('Rally SDK', function () {
           resumeCallbackCalled = true;
         }
       },
+      enableFirebase: false,
       rallySite: "http://localhost",
       studyId: "exampleStudy1",
       firebaseConfig: {},
@@ -150,6 +153,8 @@ describe('Rally SDK', function () {
     let endedCallbackCalled = false;
 
     const rally = new Rally({
+      schemaNamespace: "",
+      key: {},
       enableDevMode: false,
       stateChangeCallback: (message) => {
         if (message === runStates.PAUSED) {
@@ -159,8 +164,8 @@ describe('Rally SDK', function () {
         } else if (message === runStates.ENDED) {
           endedCallbackCalled = true;
         }
-
       },
+      enableFirebase: false,
       rallySite: "http://localhost",
       studyId: "exampleStudy1",
       firebaseConfig: {},

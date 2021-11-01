@@ -20847,6 +20847,8 @@ function v4(options, buf, offset) {
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+const CORE_ADDON_ID = "rally-core@mozilla.org";
+const SIGNUP_URL = "https://rally.mozilla.org/rally-required";
 var runStates;
 (function (runStates) {
     runStates[runStates["RUNNING"] = 0] = "RUNNING";
@@ -20870,8 +20872,24 @@ class Rally {
     /**
      * Initialize the Rally library.
      *
+     * @param {String} schemaNamespace
+     *        The namespace for this study. Must match the server-side schema.s
+     *
      * @param {Object} rallyConfig
      *        Configuration for Rally SDK.
+     *
+     * @param {Object} key
+     *        The JSON Web Key (JWK) used to encrypt the outgoing data.
+     *        See the RFC 7517 https://tools.ietf.org/html/rfc7517
+     *        for additional information. For example:
+     *
+     *        {
+     *          "kty":"EC",
+     *          "crv":"P-256",
+     *          "x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+     *          "y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+     *          "kid":"Public key used in JWS spec Appendix A.3 example"
+     *        }
      *
      * @param {boolean} rallyConfig.enableDevMode
      *        Whether or not to initialize Rally.js in developer mode.
@@ -20881,6 +20899,9 @@ class Rally {
      *        A function to call when the study is paused or running.
      *        Takes a single parameter, `message`, which is the {String}
      *        received regarding the current study state ("paused" or "running".)
+     *
+     * @param {boolean} rallyConfig.enableFirebase
+     *        Whether or not to use Firebase. If false, and not in dev mode, then the Rally Core Add-on is used.
      *
      * @param {String} rallyConfig.rallySite
      *        A string containing the Rally Web Platform site.
@@ -20895,14 +20916,18 @@ class Rally {
      *        Whether or not to initialize Rally.js in emulator mode.
      *        In this mode the SDK attempts to use a local Firebase emulator. Note that the firebaseConfig must still be provided.
      */
-    constructor({ enableDevMode, stateChangeCallback, rallySite, studyId, firebaseConfig, enableEmulatorMode }) {
+    constructor({ schemaNamespace, key, enableDevMode, stateChangeCallback, enableFirebase, rallySite, studyId, firebaseConfig, enableEmulatorMode }) {
         if (!stateChangeCallback) {
             throw new Error("Rally.initialize - Initialization failed, stateChangeCallback is required.");
         }
         if (typeof stateChangeCallback !== "function") {
             throw new Error("Rally.initialize - Initialization failed, stateChangeCallback is not a function.");
         }
+        this._namespace = Boolean(schemaNamespace);
+        this._keyId = key.kid;
+        this._key = Boolean(key);
         this._enableDevMode = Boolean(enableDevMode);
+        this._enableFirebase = Boolean(enableFirebase);
         this._enableEmulatorMode = Boolean(enableEmulatorMode);
         this._rallySite = rallySite;
         this._studyId = studyId;
@@ -20911,9 +20936,26 @@ class Rally {
         this._state = runStates.PAUSED;
         this._stateChangeCallback = stateChangeCallback;
         if (this._enableDevMode) {
-            console.debug("Rally SDK - running in developer mode, not using Firebase");
+            console.warn("Rally SDK - running in developer mode, not using Firebase");
+            // Listen for incoming messages from the Rally Web Platform site.
             browser$1.runtime.onMessage.addListener((m, s) => this._handleWebMessage(m, s));
             return;
+        }
+        if (!this._enableFirebase) {
+            console.info("Rally SDK - Firebase disabled, using Rally Core Add-on");
+            this._checkRallyCore().then(() => {
+                console.debug("Rally.initialize - Found the Core Add-on.");
+                // Listen for incoming messages from the Core Add-on.
+                browser$1.runtime.onMessageExternal.addListener((m, s) => this._handleExternalMessage(m, s));
+                return;
+            }).catch(() => __awaiter(this, void 0, void 0, function* () {
+                // The Core Add-on was not found and we're not in developer
+                // mode. Trigger the sign-up flow.
+                if (!this._enableDevMode) {
+                    yield browser$1.tabs.create({ url: SIGNUP_URL });
+                }
+                return;
+            }));
         }
         console.debug("Rally SDK - using Firebase config:", firebaseConfig);
         const firebaseApp = initializeApp(firebaseConfig);
@@ -21018,6 +21060,42 @@ class Rally {
                 loadedTab = yield browser$1.tabs.create({
                     url: this._rallySite
                 });
+            }
+        });
+    }
+    /**
+   * Check if the Core addon is installed.
+   *
+   * @returns {Promise} resolved if the core addon was found and
+   *          communication was successful, rejected otherwise.
+   */
+    _checkRallyCore() {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                const msg = {
+                    type: "core-check",
+                    data: {}
+                };
+                let response = yield browser$1.runtime.sendMessage(CORE_ADDON_ID, msg, {});
+                if (response
+                    && response.type == "core-check-response") {
+                    if (response.data
+                        && "enrolled" in response.data
+                        && response.data.enrolled === true
+                        && "rallyId" in response.data
+                        && response.data.rallyId !== null) {
+                        this._rallyId = response.data.rallyId;
+                    }
+                    else {
+                        throw new Error(`Rally._checkRallyCore - core addon present, but not enrolled in Rally`);
+                    }
+                }
+                else {
+                    throw new Error(`Rally._checkRallyCore - unexpected response returned ${response}`);
+                }
+            }
+            catch (ex) {
+                throw new Error(`Rally._checkRallyCore - core addon check failed with: ${ex}`);
             }
         });
     }
@@ -21149,6 +21227,36 @@ class Rally {
             }
         });
     }
+    /**
+     * Handles messages coming in from external addons.
+     *
+     * @param {Object} message
+     *        The payload of the message.
+     * @param {runtime.MessageSender} sender
+     *        An object containing informations about who sent
+     *        the message.
+     * @returns {Promise} The response to the received message.
+     *          It can be resolved with a value that is sent to the
+     *          `sender`.
+     */
+    _handleExternalMessage(message, sender) {
+        // We only expect messages coming from the core addon.
+        if (sender.id != CORE_ADDON_ID) {
+            return Promise.reject(new Error(`Rally._handleExternalMessage - unexpected sender ${sender.id}`));
+        }
+        switch (message.type) {
+            case "pause":
+                this._pause();
+                break;
+            case "resume":
+                this._resume();
+                break;
+            case "uninstall":
+                return browser$1.management.uninstallSelf({ showConfirmDialog: false });
+            default:
+                return Promise.reject(new Error(`Rally._handleExternalMessage - unexpected message type ${message.type}`));
+        }
+    }
     _completeSignUp(data) {
         return __awaiter(this, void 0, void 0, function* () {
             console.debug("Rally._completeSignUp called:", data);
@@ -21177,6 +21285,78 @@ class Rally {
      */
     get rallyId() {
         return this._rallyId;
+    }
+    /**
+     * Validate the provided encryption keys.
+     *
+     * @param {Object} key
+     *        The JSON Web Key (JWK) used to encrypt the outgoing data.
+     *        See the RFC 7517 https://tools.ietf.org/html/rfc7517
+     *        for additional information. For example:
+     *
+     *        {
+     *          "kty":"EC",
+     *          "crv":"P-256",
+     *          "x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+     *          "y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+     *          "kid":"Public key used in JWS spec Appendix A.3 example"
+     *        }
+     *
+     * @throws {Error} if either the key id or the JWK key object are
+     *         invalid.
+     */
+    _validateEncryptionKey(key) {
+        if (typeof key !== "object") {
+            throw new Error(`Rally._validateEncryptionKey - Invalid encryption key: ${key}`);
+        }
+        if (!("kid" in key && typeof key.kid === "string")) {
+            throw new Error(`Rally._validateEncryptionKey - Missing or invalid encryption key ID in key: ${key}`);
+        }
+    }
+    /**
+     * Submit an encrypted ping through the Rally Core addon.
+     *
+     * @param {String} payloadType
+     *        The type of the encrypted payload. This will define the
+     *        `schemaName` of the ping.
+     * @param {Object} payload
+     *        A JSON-serializable payload to be sent with the ping.
+     */
+    sendPing(payloadType, payload) {
+        return __awaiter(this, void 0, void 0, function* () {
+            // When in developer mode, dump the payload to the console.
+            if (this._enableDevMode) {
+                console.log(`Rally.sendPing - Developer mode. ${payloadType} will not be submitted`, payload);
+                return;
+            }
+            // When paused, not send data.
+            if (this._state === runStates.PAUSED) {
+                console.debug("Rally.sendPing - Study is currently paused, not sending data");
+                return;
+            }
+            // Wrap everything in a try block, as we don't really want
+            // data collection to be the culprit of a bug hindering user
+            // experience.
+            try {
+                // This function may be mistakenly called while init has not
+                // finished. Let's be safe and check for key validity again.
+                this._validateEncryptionKey(this._key);
+                const msg = {
+                    type: "telemetry-ping",
+                    data: {
+                        payloadType: payloadType,
+                        payload: payload,
+                        namespace: this._namespace,
+                        keyId: this._keyId,
+                        key: this._key
+                    }
+                };
+                yield browser$1.runtime.sendMessage(CORE_ADDON_ID, msg, {});
+            }
+            catch (ex) {
+                console.error(`Rally.sendPing - error while sending ${payloadType}`, ex);
+            }
+        });
     }
 }
 
