@@ -21045,6 +21045,11 @@ class Rally {
         });
         onAuthStateChanged(this._auth, this._authStateChangedCallback);
     }
+    /**
+     * Prompt users to sign-in to the Rally Web Platform.
+     *
+     * Called when no auth token is present, or is not valid.
+     */
     _promptSignUp() {
         return __awaiter(this, void 0, void 0, function* () {
             let loadedTab;
@@ -21064,11 +21069,11 @@ class Rally {
         });
     }
     /**
-   * Check if the Core addon is installed.
-   *
-   * @returns {Promise} resolved if the core addon was found and
-   *          communication was successful, rejected otherwise.
-   */
+     * Check if the Core addon is installed.
+     *
+     * @returns {Promise} resolved if the core addon was found and
+     *          communication was successful, rejected otherwise.
+     */
     _checkRallyCore() {
         return __awaiter(this, void 0, void 0, function* () {
             try {
@@ -21128,6 +21133,11 @@ class Rally {
         this._state = runStates.ENDED;
         this._stateChangeCallback(runStates.ENDED);
     }
+    /**
+     * Called when the state changes, this must be overridden by the study.
+     *
+     * @param runState
+     */
     _stateChangeCallback(runState) {
         throw new Error("Method not implemented, must be provided by study.");
     }
@@ -21257,6 +21267,13 @@ class Rally {
                 return Promise.reject(new Error(`Rally._handleExternalMessage - unexpected message type ${message.type}`));
         }
     }
+    /**
+     * Complete Rally sign-up process. This will be called after sign up has completed and the auth
+     * token is available for logging into the Web Platform.
+     *
+     * @param data - fetch result containing the auth token (JWT) to log in to the Rally Web Platform.
+     * @returns
+     */
     _completeSignUp(data) {
         return __awaiter(this, void 0, void 0, function* () {
             console.debug("Rally._completeSignUp called:", data);

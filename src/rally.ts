@@ -254,6 +254,11 @@ export class Rally {
     onAuthStateChanged(this._auth, this._authStateChangedCallback);
   }
 
+  /**
+   * Prompt users to sign-in to the Rally Web Platform.
+   *
+   * Called when no auth token is present, or is not valid.
+   */
   async _promptSignUp() {
     let loadedTab: Tabs.Tab;
 
@@ -272,11 +277,11 @@ export class Rally {
   }
 
   /**
- * Check if the Core addon is installed.
- *
- * @returns {Promise} resolved if the core addon was found and
- *          communication was successful, rejected otherwise.
- */
+   * Check if the Core addon is installed.
+   *
+   * @returns {Promise} resolved if the core addon was found and
+   *          communication was successful, rejected otherwise.
+   */
   async _checkRallyCore() {
     try {
       const msg = {
@@ -338,7 +343,11 @@ export class Rally {
     this._stateChangeCallback(runStates.ENDED);
   }
 
-
+  /**
+   * Called when the state changes, this must be overridden by the study.
+   *
+   * @param runState
+   */
   private _stateChangeCallback(runState: runStates) {
     throw new Error("Method not implemented, must be provided by study.");
   }
@@ -482,6 +491,14 @@ export class Rally {
           new Error(`Rally._handleExternalMessage - unexpected message type ${message.type}`));
     }
   }
+
+  /**
+   * Complete Rally sign-up process. This will be called after sign up has completed and the auth
+   * token is available for logging into the Web Platform.
+   *
+   * @param data - fetch result containing the auth token (JWT) to log in to the Rally Web Platform.
+   * @returns {boolean} - true if authentication succeeds.
+   */
 
   async _completeSignUp(data) {
     console.debug("Rally._completeSignUp called:", data);
