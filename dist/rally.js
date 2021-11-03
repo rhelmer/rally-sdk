@@ -20878,45 +20878,47 @@ class Rally {
      * @param {Object} rallyConfig
      *        Configuration for Rally SDK.
      *
-     * @param {Object} key
-     *        The JSON Web Key (JWK) used to encrypt the outgoing data.
-     *        See the RFC 7517 https://tools.ietf.org/html/rfc7517
-     *        for additional information. For example:
-     *
-     *        {
-     *          "kty":"EC",
-     *          "crv":"P-256",
-     *          "x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
-     *          "y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
-     *          "kid":"Public key used in JWS spec Appendix A.3 example"
-     *        }
-     *
      * @param {boolean} rallyConfig.enableDevMode
      *        Whether or not to initialize Rally.js in developer mode.
      *        In this mode we do not attempt to connect to Firebase, and allow messages to enable/disable enrollment.
+     *
+     * @param {Object} rallyConfig.rallyCoreConfig
+     *        Configuration for the Rally Core Add-on.
+     *
+     * @param {Object} rallyConfig.rallyWebPlatformConfig
+     *        Configuration for the Rally Web Platform.
+     *
+     * @param {String} rallyConfig.rallyWebPlatformConfig.rallySite
+     *        A string containing the Rally Web Platform site.
+     *
+     * @param {object} rallyConfig.rallyWebPlatformConfig.firebaseConfig
+     *        An object containing the Firebase backend configuration.
+     *
+     * @param {object} rallyConfig.rallyWebPlatformConfig.enableEmulatorMode
+     *        Whether or not to initialize Rally.js in emulator mode.
+     *        In this mode the SDK attempts to use a local Firebase emulator. Note that the firebaseConfig must still be provided.
      *
      * @param {Function} rallyConfig.stateChangeCallback
      *        A function to call when the study is paused or running.
      *        Takes a single parameter, `message`, which is the {String}
      *        received regarding the current study state ("paused" or "running".)
      *
-     * @param {boolean} rallyConfig.enableFirebase
-     *        Whether or not to use Firebase. If false, and not in dev mode, then the Rally Core Add-on is used.
-     *
-     * @param {String} rallyConfig.rallySite
-     *        A string containing the Rally Web Platform site.
-     *
      * @param {String} rallyConfig.studyId
      *        A string containing the unique name of the study, separate from the Firefox add-on ID and Chrome extension ID.
      *
-     * @param {object} rallyConfig.firebaseConfig
-     *        An object containing the Firebase backend configuration.
-     *
-     * @param {object} rallyConfig.enableEmulatorMode
-     *        Whether or not to initialize Rally.js in emulator mode.
-     *        In this mode the SDK attempts to use a local Firebase emulator. Note that the firebaseConfig must still be provided.
      */
-    constructor({ schemaNamespace, key, enableDevMode, stateChangeCallback, enableFirebase, rallySite, studyId, firebaseConfig, enableEmulatorMode }) {
+    constructor({ enableDevMode, rallyCoreConfig, rallyWebPlatformConfig, stateChangeCallback, studyId }) {
+        if (!(rallyCoreConfig || rallyWebPlatformConfig)) {
+            throw new Error("Rally.initialize - Initialization failed, must specify at least one of: rally web platform or core add-on config");
+        }
+        if (!rallyCoreConfig) {
+            console.warn("No Rally Core Add-on config specified");
+        }
+        if (!rallyWebPlatformConfig) {
+            console.warn("No Rally Web Platform config specified");
+        }
+        const { enableEmulatorMode, firebaseConfig, rallySite } = rallyWebPlatformConfig;
+        const { key, schemaNamespace } = rallyCoreConfig;
         if (!stateChangeCallback) {
             throw new Error("Rally.initialize - Initialization failed, stateChangeCallback is required.");
         }
@@ -20927,7 +20929,7 @@ class Rally {
         this._keyId = key.kid;
         this._key = Boolean(key);
         this._enableDevMode = Boolean(enableDevMode);
-        this._enableFirebase = Boolean(enableFirebase);
+        this._enableFirebase = Boolean(rallyWebPlatformConfig);
         this._enableEmulatorMode = Boolean(enableEmulatorMode);
         this._rallySite = rallySite;
         this._studyId = studyId;
@@ -21272,7 +21274,7 @@ class Rally {
      * token is available for logging into the Web Platform.
      *
      * @param data - fetch result containing the auth token (JWT) to log in to the Rally Web Platform.
-     * @returns
+     * @returns {boolean} - true if authentication succeeds.
      */
     _completeSignUp(data) {
         return __awaiter(this, void 0, void 0, function* () {
@@ -21346,7 +21348,7 @@ class Rally {
                 console.log(`Rally.sendPing - Developer mode. ${payloadType} will not be submitted`, payload);
                 return;
             }
-            // When paused, not send data.
+            // When paused, do not send data.
             if (this._state === runStates.PAUSED) {
                 console.debug("Rally.sendPing - Study is currently paused, not sending data");
                 return;
@@ -21355,8 +21357,6 @@ class Rally {
             // data collection to be the culprit of a bug hindering user
             // experience.
             try {
-                // This function may be mistakenly called while init has not
-                // finished. Let's be safe and check for key validity again.
                 this._validateEncryptionKey(this._key);
                 const msg = {
                     type: "telemetry-ping",

@@ -118,10 +118,22 @@ describe('Rally SDK', function () {
     let pausedCallbackCalled = false;
     let resumeCallbackCalled = false;
 
-    const rally = new Rally({
-      schemaNamespace: "",
+    const rallyCoreConfig = {
       key: {},
+      schemaNamespace: ""
+    };
+
+    const rallyWebPlatformConfig = {
+      rallySite: "http://localhost",
+      studyId: "exampleStudy1",
+      firebaseConfig: {},
+      emulatorMode: false
+    };
+
+    const rally = new Rally({
       enableDevMode: false,
+      rallyCoreConfig,
+      rallyWebPlatformConfig,
       stateChangeCallback: (message) => {
         if (message === runStates.PAUSED) {
           pausedCallbackCalled = true;
@@ -129,12 +141,8 @@ describe('Rally SDK', function () {
           resumeCallbackCalled = true;
         }
       },
-      enableFirebase: false,
-      rallySite: "http://localhost",
       studyId: "exampleStudy1",
-      firebaseConfig: {},
-      enableEmulatorMode: false,
-    })
+    });
 
     assert.equal(rally._state, runStates.PAUSED);
 
@@ -152,24 +160,30 @@ describe('Rally SDK', function () {
     let resumeCallbackCalled = false;
     let endedCallbackCalled = false;
 
-    const rally = new Rally({
-      schemaNamespace: "",
+    const rallyCoreConfig = {
       key: {},
+      schemaNamespace: ""
+    };
+
+    const rallyWebPlatformConfig = {
+      rallySite: "http://localhost",
+      studyId: "exampleStudy1",
+      firebaseConfig: {},
+      emulatorMode: false
+    };
+
+    const rally = new Rally({
       enableDevMode: false,
+      rallyCoreConfig,
+      rallyWebPlatformConfig,
       stateChangeCallback: (message) => {
         if (message === runStates.PAUSED) {
           pausedCallbackCalled = true;
         } else if (message === runStates.RUNNING) {
           resumeCallbackCalled = true;
-        } else if (message === runStates.ENDED) {
-          endedCallbackCalled = true;
         }
       },
-      enableFirebase: false,
-      rallySite: "http://localhost",
       studyId: "exampleStudy1",
-      firebaseConfig: {},
-      enableEmulatorMode: false
     });
 
     const rallyToken = "...";
