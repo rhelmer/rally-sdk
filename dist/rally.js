@@ -20917,23 +20917,22 @@ class Rally {
         if (!rallyWebPlatformConfig) {
             console.warn("No Rally Web Platform config specified");
         }
-        const { enableEmulatorMode, firebaseConfig, rallySite } = rallyWebPlatformConfig;
-        const { key, schemaNamespace } = rallyCoreConfig;
         if (!stateChangeCallback) {
             throw new Error("Rally.initialize - Initialization failed, stateChangeCallback is required.");
         }
         if (typeof stateChangeCallback !== "function") {
             throw new Error("Rally.initialize - Initialization failed, stateChangeCallback is not a function.");
         }
-        this._namespace = Boolean(schemaNamespace);
-        this._keyId = key.kid;
-        this._key = Boolean(key);
-        this._enableDevMode = Boolean(enableDevMode);
-        this._enableFirebase = Boolean(rallyWebPlatformConfig);
-        this._enableEmulatorMode = Boolean(enableEmulatorMode);
-        this._rallySite = rallySite;
         this._studyId = studyId;
-        this._signedIn = false;
+        this._enableDevMode = Boolean(enableDevMode);
+        this._enableRallyCore = Boolean(rallyCoreConfig);
+        this._enableRallyWebPlatform = Boolean(rallyWebPlatformConfig);
+        if (this._enableRallyCore) {
+            const { key, schemaNamespace } = rallyCoreConfig;
+            this._namespace = Boolean(schemaNamespace);
+            this._keyId = key.kid;
+            this._key = Boolean(key);
+        }
         // Set the initial state to paused, and register callback for future changes.
         this._state = runStates.PAUSED;
         this._stateChangeCallback = stateChangeCallback;
@@ -20943,7 +20942,7 @@ class Rally {
             browser$1.runtime.onMessage.addListener((m, s) => this._handleWebMessage(m, s));
             return;
         }
-        if (!this._enableFirebase) {
+        if (this._enableRallyCore) {
             console.info("Rally SDK - Firebase disabled, using Rally Core Add-on");
             this._checkRallyCore().then(() => {
                 console.debug("Rally.initialize - Found the Core Add-on.");
@@ -20959,93 +20958,99 @@ class Rally {
                 return;
             }));
         }
-        console.debug("Rally SDK - using Firebase config:", firebaseConfig);
-        const firebaseApp = initializeApp(firebaseConfig);
-        this._auth = getAuth(firebaseApp);
-        this._db = Cu(firebaseApp);
-        if (this._enableEmulatorMode) {
-            console.debug("Rally SDK - running in Firebase emulator mode:", firebaseConfig);
-            connectAuthEmulator(this._auth, 'http://localhost:9099');
-            mu(this._db, 'localhost', 8080);
-        }
-        this._authStateChangedCallback = (user) => __awaiter(this, void 0, void 0, function* () {
-            if (user) {
-                // Record that we have signed in, so we don't keep trying to onboard.
-                this._signedIn = true;
-                // This is a restricted user, which can see a minimal part of the users data.
-                // The users Firebase UID is needed for this, and it is available in a custom claim on the JWT.
-                const idTokenResult = yield this._auth.currentUser.getIdTokenResult();
-                const uid = idTokenResult.claims.firebaseUid;
-                // This contains the Rally ID, need to call the Rally state change callback with it.
-                dh(Iu(this._db, "extensionUsers", uid), extensionUserDoc => {
-                    if (!extensionUserDoc.exists()) {
-                        throw new Error("Rally onSnapshot - extensionUser document does not exist");
-                    }
-                    // https://datatracker.ietf.org/doc/html/rfc4122#section-4.1.7
-                    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-                    const data = extensionUserDoc.data();
-                    if (data && data.rallyId) {
-                        if (data.rallyId.match(uuidRegex)) {
-                            // Stored Rally ID looks fine, cache it and call the Rally state change callback with it.
-                            this._rallyId = data.rallyId;
+        if (this._enableRallyWebPlatform) {
+            const { enableEmulatorMode, firebaseConfig, rallySite } = rallyWebPlatformConfig;
+            this._signedIn = false;
+            this._enableEmulatorMode = enableEmulatorMode;
+            this._rallySite = rallySite;
+            console.debug("Rally SDK - using Firebase config:", firebaseConfig);
+            const firebaseApp = initializeApp(firebaseConfig);
+            this._auth = getAuth(firebaseApp);
+            this._db = Cu(firebaseApp);
+            if (this._enableEmulatorMode) {
+                console.debug("Rally SDK - running in Firebase emulator mode:", firebaseConfig);
+                connectAuthEmulator(this._auth, 'http://localhost:9099');
+                mu(this._db, 'localhost', 8080);
+            }
+            this._authStateChangedCallback = (user) => __awaiter(this, void 0, void 0, function* () {
+                if (user) {
+                    // Record that we have signed in, so we don't keep trying to onboard.
+                    this._signedIn = true;
+                    // This is a restricted user, which can see a minimal part of the users data.
+                    // The users Firebase UID is needed for this, and it is available in a custom claim on the JWT.
+                    const idTokenResult = yield this._auth.currentUser.getIdTokenResult();
+                    const uid = idTokenResult.claims.firebaseUid;
+                    // This contains the Rally ID, need to call the Rally state change callback with it.
+                    dh(Iu(this._db, "extensionUsers", uid), extensionUserDoc => {
+                        if (!extensionUserDoc.exists()) {
+                            throw new Error("Rally onSnapshot - extensionUser document does not exist");
+                        }
+                        // https://datatracker.ietf.org/doc/html/rfc4122#section-4.1.7
+                        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+                        const data = extensionUserDoc.data();
+                        if (data && data.rallyId) {
+                            if (data.rallyId.match(uuidRegex)) {
+                                // Stored Rally ID looks fine, cache it and call the Rally state change callback with it.
+                                this._rallyId = data.rallyId;
+                            }
+                            else {
+                                // Do not loop or destroy data if the stored Rally ID is invalid, bail out instead.
+                                throw new Error(`Stored Rally ID is not a valid UUID: ${data.rallyId}`);
+                            }
+                        }
+                    });
+                    dh(Iu(this._db, "studies", this._studyId), (studiesDoc) => __awaiter(this, void 0, void 0, function* () {
+                        // TODO do runtime validation of this document
+                        if (!studiesDoc.exists()) {
+                            throw new Error("Rally onSnapshot - studies document does not exist");
+                        }
+                        const data = studiesDoc.data();
+                        if (data.studyPaused && data.studyPaused === true) {
+                            if (this._state !== runStates.PAUSED) {
+                                this._pause();
+                            }
                         }
                         else {
-                            // Do not loop or destroy data if the stored Rally ID is invalid, bail out instead.
-                            throw new Error(`Stored Rally ID is not a valid UUID: ${data.rallyId}`);
+                            const userStudiesDoc = yield nh(Iu(this._db, "users", uid, "studies", this._studyId));
+                            // TODO do runtime validation of this document
+                            if (userStudiesDoc && !userStudiesDoc.exists()) {
+                                // This document is created by the site and may not exist yet.
+                                console.warn("Rally.onSnapshot - userStudies document does not exist yet");
+                                return;
+                            }
+                            const data = userStudiesDoc.data();
+                            if (data.enrolled && this._state !== runStates.RUNNING) {
+                                this._resume();
+                            }
                         }
-                    }
-                });
-                dh(Iu(this._db, "studies", this._studyId), (studiesDoc) => __awaiter(this, void 0, void 0, function* () {
-                    // TODO do runtime validation of this document
-                    if (!studiesDoc.exists()) {
-                        throw new Error("Rally onSnapshot - studies document does not exist");
-                    }
-                    const data = studiesDoc.data();
-                    if (data.studyPaused && data.studyPaused === true) {
-                        if (this._state !== runStates.PAUSED) {
-                            this._pause();
+                        if (data.studyEnded === true) {
+                            if (this._state !== runStates.ENDED) {
+                                this._end();
+                            }
                         }
-                    }
-                    else {
-                        const userStudiesDoc = yield nh(Iu(this._db, "users", uid, "studies", this._studyId));
-                        // TODO do runtime validation of this document
-                        if (userStudiesDoc && !userStudiesDoc.exists()) {
+                    }));
+                    dh(Iu(this._db, "users", uid, "studies", this._studyId), (userStudiesDoc) => __awaiter(this, void 0, void 0, function* () {
+                        if (!userStudiesDoc.exists()) {
                             // This document is created by the site and may not exist yet.
-                            console.warn("Rally.onSnapshot - userStudies document does not exist yet");
+                            console.warn("Rally.onSnapshot - userStudies document does not exist");
                             return;
                         }
                         const data = userStudiesDoc.data();
-                        if (data.enrolled && this._state !== runStates.RUNNING) {
+                        if (data.enrolled) {
                             this._resume();
                         }
-                    }
-                    if (data.studyEnded === true) {
-                        if (this._state !== runStates.ENDED) {
-                            this._end();
+                        else {
+                            this._pause();
                         }
-                    }
-                }));
-                dh(Iu(this._db, "users", uid, "studies", this._studyId), (userStudiesDoc) => __awaiter(this, void 0, void 0, function* () {
-                    if (!userStudiesDoc.exists()) {
-                        // This document is created by the site and may not exist yet.
-                        console.warn("Rally.onSnapshot - userStudies document does not exist");
-                        return;
-                    }
-                    const data = userStudiesDoc.data();
-                    if (data.enrolled) {
-                        this._resume();
-                    }
-                    else {
-                        this._pause();
-                    }
-                }));
-            }
-            else {
-                yield this._promptSignUp();
-            }
-            browser$1.runtime.onMessage.addListener((m, s) => this._handleWebMessage(m, s));
-        });
-        onAuthStateChanged(this._auth, this._authStateChangedCallback);
+                    }));
+                }
+                else {
+                    yield this._promptSignUp();
+                }
+                browser$1.runtime.onMessage.addListener((m, s) => this._handleWebMessage(m, s));
+            });
+            onAuthStateChanged(this._auth, this._authStateChangedCallback);
+        }
     }
     /**
      * Prompt users to sign-in to the Rally Web Platform.

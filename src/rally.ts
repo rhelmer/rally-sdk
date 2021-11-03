@@ -44,11 +44,11 @@ export class Rally {
   _auth: any;
   _db: any;
   _rallySite: string;
-  private _port: any;
   private _studyId: string;
   private _signedIn: any;
-  private _enableFirebase: boolean;
   private _enableEmulatorMode: boolean;
+  private _enableRallyCore: boolean;
+  private _enableRallyWebPlatform: boolean;
 
   /**
    * Initialize the Rally library.
@@ -101,9 +101,6 @@ export class Rally {
       console.warn("No Rally Web Platform config specified");
     }
 
-    const { enableEmulatorMode, firebaseConfig, rallySite } = rallyWebPlatformConfig;
-    const { key, schemaNamespace } = rallyCoreConfig;
-
     if (!stateChangeCallback) {
       throw new Error("Rally.initialize - Initialization failed, stateChangeCallback is required.")
     }
@@ -112,16 +109,18 @@ export class Rally {
       throw new Error("Rally.initialize - Initialization failed, stateChangeCallback is not a function.")
     }
 
-    this._namespace = Boolean(schemaNamespace);
-    this._keyId = key.kid;
-    this._key = Boolean(key);
-    this._enableDevMode = Boolean(enableDevMode);
-    this._enableFirebase = Boolean(rallyWebPlatformConfig);
-    this._enableEmulatorMode = Boolean(enableEmulatorMode);
-    this._rallySite = rallySite;
     this._studyId = studyId;
+    this._enableDevMode = Boolean(enableDevMode);
+    this._enableRallyCore = Boolean(rallyCoreConfig);
+    this._enableRallyWebPlatform = Boolean(rallyWebPlatformConfig);
 
-    this._signedIn = false;
+    if (this._enableRallyCore) {
+      const { key, schemaNamespace } = rallyCoreConfig;
+
+      this._namespace = Boolean(schemaNamespace);
+      this._keyId = key.kid;
+      this._key = Boolean(key);
+    }
 
     // Set the initial state to paused, and register callback for future changes.
     this._state = runStates.PAUSED;
@@ -136,7 +135,7 @@ export class Rally {
       return;
     }
 
-    if (!this._enableFirebase) {
+    if (this._enableRallyCore) {
       console.info("Rally SDK - Firebase disabled, using Rally Core Add-on");
 
       this._checkRallyCore().then(() => {
@@ -158,106 +157,115 @@ export class Rally {
       });
     }
 
-    console.debug("Rally SDK - using Firebase config:", firebaseConfig);
-    const firebaseApp = initializeApp(firebaseConfig);
+    if (this._enableRallyWebPlatform) {
+      const { enableEmulatorMode, firebaseConfig, rallySite } = rallyWebPlatformConfig;
 
-    this._auth = getAuth(firebaseApp);
-    this._db = getFirestore(firebaseApp);
+      this._signedIn = false;
 
-    if (this._enableEmulatorMode) {
-      console.debug("Rally SDK - running in Firebase emulator mode:", firebaseConfig);
+      this._enableEmulatorMode = enableEmulatorMode;
+      this._rallySite = rallySite;
 
-      connectAuthEmulator(this._auth, 'http://localhost:9099');
-      connectFirestoreEmulator(this._db, 'localhost', 8080);
-    }
+      console.debug("Rally SDK - using Firebase config:", firebaseConfig);
+      const firebaseApp = initializeApp(firebaseConfig);
 
-    this._authStateChangedCallback = async (user: any) => {
-      if (user) {
-        // Record that we have signed in, so we don't keep trying to onboard.
-        this._signedIn = true;
+      this._auth = getAuth(firebaseApp);
+      this._db = getFirestore(firebaseApp);
 
-        // This is a restricted user, which can see a minimal part of the users data.
-        // The users Firebase UID is needed for this, and it is available in a custom claim on the JWT.
-        const idTokenResult = await this._auth.currentUser.getIdTokenResult();
-        const uid = idTokenResult.claims.firebaseUid;
+      if (this._enableEmulatorMode) {
+        console.debug("Rally SDK - running in Firebase emulator mode:", firebaseConfig);
 
-        // This contains the Rally ID, need to call the Rally state change callback with it.
-        onSnapshot(doc(this._db, "extensionUsers", uid), extensionUserDoc => {
-          if (!extensionUserDoc.exists()) {
-            throw new Error("Rally onSnapshot - extensionUser document does not exist");
-          }
+        connectAuthEmulator(this._auth, 'http://localhost:9099');
+        connectFirestoreEmulator(this._db, 'localhost', 8080);
+      }
 
-          // https://datatracker.ietf.org/doc/html/rfc4122#section-4.1.7
-          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      this._authStateChangedCallback = async (user: any) => {
+        if (user) {
+          // Record that we have signed in, so we don't keep trying to onboard.
+          this._signedIn = true;
 
-          const data = extensionUserDoc.data();
+          // This is a restricted user, which can see a minimal part of the users data.
+          // The users Firebase UID is needed for this, and it is available in a custom claim on the JWT.
+          const idTokenResult = await this._auth.currentUser.getIdTokenResult();
+          const uid = idTokenResult.claims.firebaseUid;
 
-          if (data && data.rallyId) {
-            if (data.rallyId.match(uuidRegex)) {
-              // Stored Rally ID looks fine, cache it and call the Rally state change callback with it.
-              this._rallyId = data.rallyId;
-            } else {
-              // Do not loop or destroy data if the stored Rally ID is invalid, bail out instead.
-              throw new Error(`Stored Rally ID is not a valid UUID: ${data.rallyId}`);
+          // This contains the Rally ID, need to call the Rally state change callback with it.
+          onSnapshot(doc(this._db, "extensionUsers", uid), extensionUserDoc => {
+            if (!extensionUserDoc.exists()) {
+              throw new Error("Rally onSnapshot - extensionUser document does not exist");
             }
-          }
-        });
 
-        onSnapshot(doc(this._db, "studies", this._studyId), async studiesDoc => {
-          // TODO do runtime validation of this document
-          if (!studiesDoc.exists()) {
-            throw new Error("Rally onSnapshot - studies document does not exist");
-          }
-          const data = studiesDoc.data();
-          if (data.studyPaused && data.studyPaused === true) {
-            if (this._state !== runStates.PAUSED) {
-              this._pause();
+            // https://datatracker.ietf.org/doc/html/rfc4122#section-4.1.7
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+            const data = extensionUserDoc.data();
+
+            if (data && data.rallyId) {
+              if (data.rallyId.match(uuidRegex)) {
+                // Stored Rally ID looks fine, cache it and call the Rally state change callback with it.
+                this._rallyId = data.rallyId;
+              } else {
+                // Do not loop or destroy data if the stored Rally ID is invalid, bail out instead.
+                throw new Error(`Stored Rally ID is not a valid UUID: ${data.rallyId}`);
+              }
             }
-          } else {
-            const userStudiesDoc = await getDoc(doc(this._db, "users", uid, "studies", this._studyId));
+          });
+
+          onSnapshot(doc(this._db, "studies", this._studyId), async studiesDoc => {
             // TODO do runtime validation of this document
-            if (userStudiesDoc && !userStudiesDoc.exists()) {
+            if (!studiesDoc.exists()) {
+              throw new Error("Rally onSnapshot - studies document does not exist");
+            }
+            const data = studiesDoc.data();
+            if (data.studyPaused && data.studyPaused === true) {
+              if (this._state !== runStates.PAUSED) {
+                this._pause();
+              }
+            } else {
+              const userStudiesDoc = await getDoc(doc(this._db, "users", uid, "studies", this._studyId));
+              // TODO do runtime validation of this document
+              if (userStudiesDoc && !userStudiesDoc.exists()) {
+                // This document is created by the site and may not exist yet.
+                console.warn("Rally.onSnapshot - userStudies document does not exist yet");
+                return;
+              }
+
+              const data = userStudiesDoc.data();
+
+              if (data.enrolled && this._state !== runStates.RUNNING) {
+                this._resume();
+              }
+            }
+
+            if (data.studyEnded === true) {
+              if (this._state !== runStates.ENDED) {
+                this._end();
+              }
+            }
+          });
+
+          onSnapshot(doc(this._db, "users", uid, "studies", this._studyId), async userStudiesDoc => {
+            if (!userStudiesDoc.exists()) {
               // This document is created by the site and may not exist yet.
-              console.warn("Rally.onSnapshot - userStudies document does not exist yet");
+              console.warn("Rally.onSnapshot - userStudies document does not exist");
               return;
             }
 
             const data = userStudiesDoc.data();
-
-            if (data.enrolled && this._state !== runStates.RUNNING) {
+            if (data.enrolled) {
               this._resume();
+            } else {
+              this._pause();
             }
-          }
+          });
+        } else {
+          await this._promptSignUp();
+        }
 
-          if (data.studyEnded === true) {
-            if (this._state !== runStates.ENDED) {
-              this._end();
-            }
-          }
-        });
-
-        onSnapshot(doc(this._db, "users", uid, "studies", this._studyId), async userStudiesDoc => {
-          if (!userStudiesDoc.exists()) {
-            // This document is created by the site and may not exist yet.
-            console.warn("Rally.onSnapshot - userStudies document does not exist");
-            return;
-          }
-
-          const data = userStudiesDoc.data();
-          if (data.enrolled) {
-            this._resume();
-          } else {
-            this._pause();
-          }
-        });
-      } else {
-        await this._promptSignUp();
+        browser.runtime.onMessage.addListener((m, s) => this._handleWebMessage(m, s));
       }
 
-      browser.runtime.onMessage.addListener((m, s) => this._handleWebMessage(m, s));
+      onAuthStateChanged(this._auth, this._authStateChangedCallback);
     }
-
-    onAuthStateChanged(this._auth, this._authStateChangedCallback);
   }
 
   /**
