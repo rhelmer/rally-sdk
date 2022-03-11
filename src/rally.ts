@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { browser, Tabs } from "webextension-polyfill-ts";
+import { browser, Runtime, Tabs } from "webextension-polyfill-ts";
 
 import { initializeApp } from "firebase/app"
 import { connectAuthEmulator, getAuth, onAuthStateChanged, signInWithCustomToken } from "firebase/auth";
@@ -258,24 +258,25 @@ export class Rally {
   /**
   * Handles messages coming in from the external website.
   *
-  * @param {Object} message
-  *        The payload of the message. May be an empty object, or contain auth credential.
+  * @param {string} message.state
+  *        In dev mode, may contain a state change comment: "resume", "pause", or "end".
   *
-  *        email credential: { email, password, providerId }
-  *        oAuth credential: { oauthIdToken, providerId }
+  * @param {string} message.rallyToken
+  *        A custom token (JWT), @see https://firebase.google.com/docs/auth/admin/create-custom-tokens
   *
   * @param {runtime.MessageSender} sender
   *        An object containing information about who sent
   *        the message.
+  *
   * @returns {Promise} The response to the received message.
   *          It can be resolved with a value that is sent to the
   *          `sender` or rejected in case of errors.
   */
-  async _handleWebMessage(message: { type: webMessages, data }, sender: any) {
+  async _handleWebMessage(message: { type: webMessages, data: { state?: string, rallyToken?: string } }, sender: Runtime.MessageSender): Promise<any> {
     if (sender.id !== browser.runtime.id) {
       throw new Error(`Rally._handleWebMessage - unknown sender ${sender.id}, expected ${browser.runtime.id}`);
     }
-    console.log("Rally._handleWebMessage - received web message", message, "from", sender);
+
     // ** IMPORTANT **
     //
     // The website should *NOT EVER* be trusted. Other addons could be
@@ -357,7 +358,9 @@ export class Rally {
 
         break;
       default:
-        console.warn(`Rally._handleWebMessage - unexpected message type "${message.type}"`);
+        if (message.type.startsWith("rally-sdk")) {
+          console.warn(`Rally._handleWebMessage - unexpected message type "${message.type}"`);
+        }
     }
   }
 
