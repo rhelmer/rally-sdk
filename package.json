@@ -60,5 +60,8 @@
   "bugs": {
     "url": "https://github.com/mozilla-rally/rally-core-addon/issues"
   },
-  "homepage": "https://github.com/mozilla-rally/rally-core-addon#readme"
+  "homepage": "https://github.com/mozilla-rally/rally-core-addon#readme",
+  "publishConfig": {
+    "access": "public"
+  }
 }
